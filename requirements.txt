@@ -1,0 +1,6 @@
+sounddevice
+numpy
+faster-whisper
+rich
+amazon-transcribe
+boto3
