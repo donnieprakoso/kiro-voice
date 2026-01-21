@@ -79,7 +79,7 @@ brew install sox
 - `question mark` → `?`
 - `exclamation mark` → `!`
 - `new line` → `\n`
-- `command enter` → Execute command (send to Kiro-CLI)
+- `enter` → Execute command (send to Kiro-CLI)
 
 ### Control Commands
 
