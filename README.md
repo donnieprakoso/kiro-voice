@@ -1,4 +1,4 @@
-[![Badge](https://d2v7cx6vtbimce.cloudfront.net/badge.v2?type=code&style=for-the-badge&logoStyle=gray)](https://kiro.dev?trk=716f0d36-cc87-416b-9c6a-44880d969921&sc_channel=el)
+[![Badge](https://d2v7cx6vtbimce.cloudfront.net/badge.v2?type=code&style=for-the-badge&logoStyle=gray&url=https%3A%2F%2Fgithub.com%2Fdonnieprakoso%2Fkiro-voice)](https://kiro.dev?trk=716f0d36-cc87-416b-9c6a-44880d969921&sc_channel=el)
 
 # Kiro Voice
 (or Voice-to-Kiro as it was the initial name but I'm too lazy to change the var in the application)
