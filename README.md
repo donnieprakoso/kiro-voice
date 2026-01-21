@@ -1,7 +1,7 @@
 [![Badge](https://d2v7cx6vtbimce.cloudfront.net/badge.v2?type=code&style=for-the-badge&logoStyle=gray&url=https%3A%2F%2Fgithub.com%2Fdonnieprakoso%2Fkiro-voice)](https://kiro.dev?trk=716f0d36-cc87-416b-9c6a-44880d969921&sc_channel=el)
 
 # Kiro Voice
-(or Voice-to-Kiro as it was the initial name but I'm too lazy to change the var in the application)
+~~(or Voice-to-Kiro as it was the initial name but I'm too lazy to change the var in the application)~~
 This small project is a voice-driven interaction with Kiro-CLI through real-time audio transcription. I'm currently using this to converse with Kiro over tmux. There are 2 available engines: 1) Faster Whisper (locally processed but it's not that accurate enough) and surprisingly accurate and way faster 2) Amazon Transcribe streaming. I'm using Amazon Transcribe streaming at the moment.
 
 ## Features

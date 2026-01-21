@@ -4,7 +4,6 @@ import threading
 import numpy as np
 from collections import deque
 from amazon_transcribe.client import TranscribeStreamingClient
-from amazon_transcribe.handlers import TranscriptResultStreamHandler
 from amazon_transcribe.model import TranscriptEvent
 
 logger = logging.getLogger(__name__)
@@ -19,9 +18,10 @@ class AWSTranscriber:
         self.language_code = language_code
         self.sample_rate = 16000
 
+        self.audio_queue = deque()
         self.output_queue = deque(maxlen=10)
         self.running = False
-        self.stream = None
+        self.loop = None
         self.thread = None
 
         # Silence asyncio debug logs
@@ -33,33 +33,46 @@ class AWSTranscriber:
         """Stream audio to Amazon Transcribe."""
         client = TranscribeStreamingClient(region=self.region)
 
-        self.stream = await client.start_stream_transcription(
+        stream = await client.start_stream_transcription(
             language_code=self.language_code,
             media_sample_rate_hz=self.sample_rate,
             media_encoding="pcm",
         )
 
-        # Handle responses
-        async for event in self.stream.output_stream:
-            if isinstance(event, TranscriptEvent):
-                for result in event.transcript.results:
-                    if not result.is_partial:
-                        for alt in result.alternatives:
-                            text = alt.transcript.strip()
-                            if text:
-                                logger.debug(f"Amazon Transcribed: '{text}'")
-                                self.output_queue.append(text)
+        async def write_chunks():
+            """Write audio chunks from queue to stream."""
+            while self.running:
+                if self.audio_queue:
+                    chunk = self.audio_queue.popleft()
+                    await stream.input_stream.send_audio_event(audio_chunk=chunk)
+                else:
+                    await asyncio.sleep(0.01)
+            await stream.input_stream.end_stream()
+
+        async def read_responses():
+            """Read transcription responses from stream."""
+            async for event in stream.output_stream:
+                if isinstance(event, TranscriptEvent):
+                    for result in event.transcript.results:
+                        if not result.is_partial:
+                            for alt in result.alternatives:
+                                text = alt.transcript.strip()
+                                if text:
+                                    logger.debug(f"Amazon Transcribed: '{text}'")
+                                    self.output_queue.append(text)
+
+        await asyncio.gather(write_chunks(), read_responses())
 
     def _run_stream(self):
         """Run streaming in background thread."""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        self.loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(self.loop)
         try:
-            loop.run_until_complete(self._stream_audio())
+            self.loop.run_until_complete(self._stream_audio())
         except Exception as e:
             logger.error(f"Amazon Transcribe error: {e}")
         finally:
-            loop.close()
+            self.loop.close()
 
     def start(self):
         """Start the transcription stream."""
@@ -78,13 +91,11 @@ class AWSTranscriber:
     def stop(self):
         """Stop the transcription stream."""
         self.running = False
-        if self.stream:
-            asyncio.run(self.stream.input_stream.end_stream())
         logger.info("Amazon Transcribe stream stopped")
 
     def add_audio(self, audio_chunk):
-        """Add audio chunk to transcription stream."""
-        if not self.running or not self.stream:
+        """Add audio chunk to transcription queue."""
+        if not self.running:
             return
 
         # Convert numpy array to bytes (16-bit PCM)
@@ -92,11 +103,8 @@ class AWSTranscriber:
         audio_int16 = (audio_data * 32767).astype(np.int16)
         audio_bytes = audio_int16.tobytes()
 
-        # Send to stream
-        try:
-            asyncio.run(self.stream.input_stream.send_audio_event(audio_chunk=audio_bytes))
-        except Exception as e:
-            logger.error(f"Error sending audio: {e}")
+        # Add to queue (non-blocking)
+        self.audio_queue.append(audio_bytes)
 
     def transcribe(self):
         """Get transcribed text from queue."""

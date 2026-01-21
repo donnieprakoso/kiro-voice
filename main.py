@@ -2,22 +2,25 @@
 import argparse
 import logging
 import sys
-import time
 import threading
+import time
+import numpy as np
 from collections import deque
+
 from rich.console import Console
+from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
-from rich.layout import Layout
 from rich.text import Text
 
-from audio_handler import select_audio_device, AudioCapture
+from audio_handler import AudioCapture, select_audio_device
+from command_parser import parse_transcription
 from tmux_controller import select_tmux_pane, send_to_tmux
 from transcriber import Transcriber
 from transcriber_aws import AWSTranscriber
-from command_parser import parse_transcription
 
 console = Console()
+
 
 class VoiceToKiro:
     """Main application class."""
@@ -32,6 +35,7 @@ class VoiceToKiro:
         self.is_listening = False
         self.is_muted = False
         self.running = True
+        self.audio_level = 0.0  # Audio level indicator
 
         self.audio_device = None
         self.tmux_pane = None
@@ -53,7 +57,9 @@ class VoiceToKiro:
             handler = logging.StreamHandler(sys.stderr)
             level = logging.INFO
 
-        handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+        )
         root_logger.addHandler(handler)
         root_logger.setLevel(level)
 
@@ -64,7 +70,7 @@ class VoiceToKiro:
             if not self.remote_mode:
                 self.audio_device = select_audio_device()
             else:
-                self.audio_device = {'name': 'stdin (remote)', 'index': None}
+                self.audio_device = {"name": "stdin (remote)", "index": None}
                 console.print("[yellow]Remote mode: Reading audio from stdin[/yellow]")
 
             # Select tmux pane
@@ -81,10 +87,12 @@ class VoiceToKiro:
 
             # Initialize audio capture
             self.audio_capture = AudioCapture(
-                device_index=self.audio_device['index'] if not self.remote_mode else None,
+                device_index=self.audio_device["index"]
+                if not self.remote_mode
+                else None,
                 sample_rate=16000,
                 callback=self.on_audio_chunk,
-                stdin_mode=self.remote_mode
+                stdin_mode=self.remote_mode,
             )
 
             return True
@@ -94,6 +102,11 @@ class VoiceToKiro:
 
     def on_audio_chunk(self, audio_data):
         """Callback for audio chunks."""
+        # Calculate audio level (RMS)
+        rms = np.sqrt(np.mean(audio_data**2))
+        with self.lock:
+            self.audio_level = min(rms * 10, 1.0)  # Scale and cap at 1.0
+        
         if not self.is_muted and self.transcriber:
             self.transcriber.add_audio(audio_data)
 
@@ -103,14 +116,16 @@ class VoiceToKiro:
             if not self.is_muted and self.transcriber:
                 text = self.transcriber.transcribe()
                 if text:
-                    processed_text, should_execute, should_delete, should_clear = parse_transcription(text)
+                    processed_text, should_execute, should_delete, should_clear = (
+                        parse_transcription(text)
+                    )
 
                     with self.lock:
                         # Handle clear command
                         if should_clear:
                             self.buffer = ""
                             continue
-                        
+
                         # Handle delete command
                         if should_delete:
                             words = self.buffer.split()
@@ -118,7 +133,7 @@ class VoiceToKiro:
                                 words.pop()
                                 self.buffer = " ".join(words)
                             continue
-                        
+
                         # Add processed text to buffer
                         if processed_text:
                             self.buffer += " " + processed_text
@@ -137,14 +152,22 @@ class VoiceToKiro:
         with self.lock:
             status_text = "Listening 🎤" if not self.is_muted else "Muted 🔇"
             status_style = "green" if not self.is_muted else "yellow"
-            device_name = self.audio_device['name'] if self.audio_device else "None"
+            device_name = self.audio_device["name"] if self.audio_device else "None"
+            
+            # Generate audio level meter
+            meter_width = 20
+            filled = int(self.audio_level * meter_width)
+            meter = "█" * filled + "░" * (meter_width - filled)
+            meter_color = "green" if self.audio_level > 0.1 else "dim"
 
             # Main panel content
             content = Text()
             content.append("Status: ", style="bold")
             content.append(status_text + "\n", style=status_style)
             content.append(f"Device: {device_name}\n")
-            content.append(f"Target: {self.tmux_pane}\n\n")
+            content.append(f"Target: {self.tmux_pane}\n")
+            content.append("Audio:  ", style="bold")
+            content.append(f"{meter}\n", style=meter_color)
             content.append("─" * 40 + "\n")
             content.append("Buffer:\n", style="bold cyan")
             content.append("> ")
@@ -156,9 +179,11 @@ class VoiceToKiro:
             content.append("Commands: ", style="bold yellow")
             content.append("/mute /exit\n")
             content.append("Voice: ", style="bold yellow")
-            content.append("period, comma, question mark,\n       exclamation mark, new line, enter,\n       delete, clear\n")
+            content.append(
+                "period, comma, question mark,\n       exclamation mark, new line, enter,\n       delete, clear\n"
+            )
 
-            return Panel(content, title="Voice-to-Kiro", border_style="blue")
+            return Panel(content, title="Kiro Voice", border_style="blue")
 
     def handle_command(self, cmd):
         """Handle user commands."""
@@ -187,14 +212,18 @@ class VoiceToKiro:
         self.is_listening = True
 
         # Start transcription thread
-        transcription_thread = threading.Thread(target=self.process_transcription, daemon=True)
+        transcription_thread = threading.Thread(
+            target=self.process_transcription, daemon=True
+        )
         transcription_thread.start()
 
         console.print("\n[green]Voice-to-Kiro started![/green]")
         console.print("Type commands or let it listen...\n")
 
         try:
-            with Live(self.generate_display(), refresh_per_second=2, console=console) as live:
+            with Live(
+                self.generate_display(), refresh_per_second=2, console=console
+            ) as live:
                 while self.running:
                     live.update(self.generate_display())
                     time.sleep(0.5)
@@ -212,15 +241,27 @@ class VoiceToKiro:
             self.transcriber.stop()
         console.print("\n[yellow]Shutting down...[/yellow]")
 
+
 def main():
     parser = argparse.ArgumentParser(description="Voice-to-Kiro CLI")
-    parser.add_argument('--remote', action='store_true', help='Remote mode: read audio from stdin')
-    parser.add_argument('--debug-log', type=str, help='Write debug logs to file (e.g., ./app.log)')
-    parser.add_argument('--aws', action='store_true', help='Use Amazon Transcribe instead of local Whisper')
+    parser.add_argument(
+        "--remote", action="store_true", help="Remote mode: read audio from stdin"
+    )
+    parser.add_argument(
+        "--debug-log", type=str, help="Write debug logs to file (e.g., ./app.log)"
+    )
+    parser.add_argument(
+        "--aws",
+        action="store_true",
+        help="Use Amazon Transcribe instead of local Whisper",
+    )
     args = parser.parse_args()
 
-    app = VoiceToKiro(remote_mode=args.remote, debug_log=args.debug_log, use_aws=args.aws)
+    app = VoiceToKiro(
+        remote_mode=args.remote, debug_log=args.debug_log, use_aws=args.aws
+    )
     app.run()
+
 
 if __name__ == "__main__":
     main()
